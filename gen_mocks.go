@@ -1,4 +1,4 @@
-package main
+package main // import "sourcegraph.com/sourcegraph/gen-mocks"
 
 import (
 	"bytes"
