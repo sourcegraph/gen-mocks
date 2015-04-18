@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/printer"
 	"go/token"
@@ -23,6 +24,8 @@ var (
 	ifacePat    = flag.String("i", ".+Service", "regexp pattern for selecting interface types by name")
 	writeFiles  = flag.Bool("w", false, "write over existing files in output directory (default: writes to stdout)")
 	outDir      = flag.String("o", ".", "output directory")
+	outPkg      = flag.String("outpkg", "", "output pkg name (default: same as input pkg)")
+	namePrefix  = flag.String("name_prefix", "Mock", "output: name prefix of mock impl types (e.g., T -> MockT)")
 
 	fset = token.NewFileSet()
 )
@@ -30,6 +33,11 @@ var (
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
+
+	bpkg, err := build.Import(*ifacePkgDir, ".", build.FindOnly)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	pat, err := regexp.Compile(*ifacePat)
 	if err != nil {
@@ -50,7 +58,15 @@ func main() {
 			log.Printf("warning: package has no interface types matching %q", *ifacePat)
 			continue
 		}
-		if err := writeMockImplFiles(*outDir, pkg.Name, ifaces); err != nil {
+
+		var pkgName string
+		if *outPkg == "" {
+			pkgName = pkg.Name
+		} else {
+			pkgName = *outPkg
+		}
+
+		if err := writeMockImplFiles(*outDir, pkgName, pkg.Name, bpkg.ImportPath, ifaces); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -93,7 +109,7 @@ func (v visitFn) Visit(node ast.Node) ast.Visitor {
 	}
 }
 
-func writeMockImplFiles(outDir, outPkg string, svcIfaces []*ast.TypeSpec) error {
+func writeMockImplFiles(outDir, outPkg, ifacePkgName, ifacePkgPath string, svcIfaces []*ast.TypeSpec) error {
 	if err := os.MkdirAll(outDir, 0700); err != nil {
 		return err
 	}
@@ -112,7 +128,7 @@ func writeMockImplFiles(outDir, outPkg string, svcIfaces []*ast.TypeSpec) error 
 		}
 
 		// struct implementation type
-		mockTypeName := "Mock" + iface.Name.Name
+		mockTypeName := *namePrefix + iface.Name.Name
 		implType := &ast.GenDecl{Tok: token.TYPE, Specs: []ast.Spec{&ast.TypeSpec{
 			Name: ast.NewIdent(mockTypeName),
 			Type: &ast.StructType{Fields: &ast.FieldList{List: methFields}},
@@ -123,6 +139,10 @@ func writeMockImplFiles(outDir, outPkg string, svcIfaces []*ast.TypeSpec) error 
 		for _, methField := range iface.Type.(*ast.InterfaceType).Methods.List {
 			if meth, ok := methField.Type.(*ast.FuncType); ok {
 				synthesizeFieldNamesIfMissing(meth.Params)
+				if ifacePkgName != outPkg {
+					// TODO(sqs): check for import paths or dirs unequal, not pkg name
+					qualifyPkgRefs(meth, ifacePkgName)
+				}
 				decls = append(decls, &ast.FuncDecl{
 					Recv: &ast.FieldList{List: []*ast.Field{
 						{
@@ -146,6 +166,29 @@ func writeMockImplFiles(outDir, outPkg string, svcIfaces []*ast.TypeSpec) error 
 				})
 			}
 		}
+
+		// compile-time implements checks
+		var ifaceType ast.Expr
+		if ifacePkgName == outPkg {
+			ifaceType = ast.NewIdent(iface.Name.Name)
+		} else {
+			ifaceType = &ast.SelectorExpr{X: ast.NewIdent(ifacePkgName), Sel: ast.NewIdent(iface.Name.Name)}
+		}
+		decls = append(decls, &ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{
+				&ast.ValueSpec{
+					Names: []*ast.Ident{ast.NewIdent("_")},
+					Type:  ifaceType,
+					Values: []ast.Expr{
+						&ast.CallExpr{
+							Fun:  &ast.ParenExpr{X: &ast.StarExpr{X: ast.NewIdent(mockTypeName)}},
+							Args: []ast.Expr{ast.NewIdent("nil")},
+						},
+					},
+				},
+			},
+		})
 
 		file := &ast.File{
 			Name:  ast.NewIdent(outPkg),
@@ -185,6 +228,33 @@ func writeMockImplFiles(outDir, outPkg string, svcIfaces []*ast.TypeSpec) error 
 		w.Write(src)
 	}
 	return nil
+}
+
+// qualifyPkgRefs qualifies all refs to non-package-qualified non-builtin types in f so that they refer to definitions in pkg. E.g., 'func(x MyType) -> func (x pkg.MyType)'.
+func qualifyPkgRefs(f *ast.FuncType, pkg string) {
+	var qualify func(x ast.Expr) ast.Expr
+	qualify = func(x ast.Expr) ast.Expr {
+		switch y := x.(type) {
+		case *ast.Ident:
+			if ast.IsExported(y.Name) {
+				return &ast.SelectorExpr{X: ast.NewIdent(pkg), Sel: y}
+			}
+		case *ast.StarExpr:
+			y.X = qualify(y.X)
+		case *ast.ArrayType:
+			y.Elt = qualify(y.Elt)
+		case *ast.MapType:
+			y.Key = qualify(y.Key)
+			y.Value = qualify(y.Value)
+		}
+		return x
+	}
+	for _, p := range f.Params.List {
+		p.Type = qualify(p.Type)
+	}
+	for _, r := range f.Results.List {
+		r.Type = qualify(r.Type)
+	}
 }
 
 // synthesizeFieldNamesIfMissing adds synthesized variable names to fl
