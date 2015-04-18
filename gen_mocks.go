@@ -145,6 +145,7 @@ func writeMockImplFiles(outDir, pkgName string, svcIfaces []*ast.TypeSpec) error
 		// struct methods
 		for _, methField := range iface.Type.(*ast.InterfaceType).Methods.List {
 			if meth, ok := methField.Type.(*ast.FuncType); ok {
+				synthesizeFieldNamesIfMissing(meth.Params)
 				decls = append(decls, &ast.FuncDecl{
 					Recv: &ast.FieldList{List: []*ast.Field{
 						{
@@ -206,6 +207,18 @@ func writeMockImplFiles(outDir, pkgName string, svcIfaces []*ast.TypeSpec) error
 		w.Write(src)
 	}
 	return nil
+}
+
+// synthesizeFieldNamesIfMissing adds synthesized variable names to fl
+// if it contains fields with no name. E.g., the field list in
+// `func(string, int)` would be converted to `func(v0 string, v1
+// int)`.
+func synthesizeFieldNamesIfMissing(fl *ast.FieldList) {
+	for i, f := range fl.List {
+		if len(f.Names) == 0 {
+			f.Names = []*ast.Ident{ast.NewIdent(fmt.Sprintf("v%d", i))}
+		}
+	}
 }
 
 func fieldListToIdentList(fl *ast.FieldList) []ast.Expr {
