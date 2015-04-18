@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"golang.org/x/tools/go/ast/astutil"
@@ -21,6 +22,7 @@ import (
 
 var (
 	importPath = flag.String("p", "", "package path")
+	ifacePat   = flag.String("i", ".+Service", "regexp pattern for selecting interface types by name")
 	writeFiles = flag.Bool("w", false, "write over existing files in output directory (default: writes to stdout)")
 	outDir     = flag.String("o", "svc", "output directory")
 	pkgName    = flag.String("n", "svc", "package name")
@@ -35,23 +37,33 @@ func main() {
 		log.Fatal("Import path must be set")
 	}
 
-	svcPkg, err := parseSvcPkg()
+	pat, err := regexp.Compile(*ifacePat)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	svcs, err := readServiceInterfaces(svcPkg)
+	ifacePkg, err := parseIfacePkg(*importPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err := writeMockImplFiles(*outDir, svcPkg.Name, svcs); err != nil {
+	ifaces, err := readIfaces(ifacePkg, pat)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if len(ifaces) == 0 {
+		log.Printf("warning: package has no interface types matching %q", *ifacePat)
+		return
+	}
+
+	if err := writeMockImplFiles(*outDir, ifacePkg.Name, ifaces); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func parseSvcPkg() (*ast.Package, error) {
-	pkg, err := build.Import(*importPath, "", 0)
+func parseIfacePkg(importPath string) (*ast.Package, error) {
+	pkg, err := build.Import(importPath, "", 0)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -64,12 +76,12 @@ func parseSvcPkg() (*ast.Package, error) {
 			return pkg, nil
 		}
 	}
-	return nil, fmt.Errorf("No 'svc' package found in %s.", pkg.Dir)
+	return nil, fmt.Errorf("No %q package found in %s.", importPath, pkg.Dir)
 }
 
-// readServiceInterfaces returns a list of *Service interfaces in
-// package svc that should be mocked.
-func readServiceInterfaces(pkg *ast.Package) ([]*ast.TypeSpec, error) {
+// readIfaces returns a list of interface types in pkg that should be
+// mocked.
+func readIfaces(pkg *ast.Package, pat *regexp.Regexp) ([]*ast.TypeSpec, error) {
 	var ifaces []*ast.TypeSpec
 	ast.Walk(visitFn(func(node ast.Node) bool {
 		switch node := node.(type) {
@@ -80,7 +92,7 @@ func readServiceInterfaces(pkg *ast.Package) ([]*ast.TypeSpec, error) {
 					if _, ok := tspec.Type.(*ast.InterfaceType); !ok {
 						continue
 					}
-					if name := tspec.Name.Name; strings.HasSuffix(name, "Service") {
+					if name := tspec.Name.Name; pat.MatchString(name) {
 						ifaces = append(ifaces, tspec)
 					}
 				}
