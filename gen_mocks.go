@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/build"
 	"go/parser"
 	"go/printer"
 	"go/token"
@@ -16,16 +15,14 @@ import (
 	"regexp"
 	"strings"
 
-	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/imports"
 )
 
 var (
-	importPath = flag.String("p", "", "package path")
-	ifacePat   = flag.String("i", ".+Service", "regexp pattern for selecting interface types by name")
-	writeFiles = flag.Bool("w", false, "write over existing files in output directory (default: writes to stdout)")
-	outDir     = flag.String("o", "svc", "output directory")
-	pkgName    = flag.String("n", "svc", "package name")
+	ifacePkgDir = flag.String("p", ".", "directory of package containing interface types")
+	ifacePat    = flag.String("i", ".+Service", "regexp pattern for selecting interface types by name")
+	writeFiles  = flag.Bool("w", false, "write over existing files in output directory (default: writes to stdout)")
+	outDir      = flag.String("o", ".", "output directory")
 
 	fset = token.NewFileSet()
 )
@@ -33,50 +30,30 @@ var (
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
-	if *importPath == "" {
-		log.Fatal("Import path must be set")
-	}
 
 	pat, err := regexp.Compile(*ifacePat)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ifacePkg, err := parseIfacePkg(*importPath)
+	pkgs, err := parser.ParseDir(fset, *ifacePkgDir, nil, parser.AllErrors)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ifaces, err := readIfaces(ifacePkg, pat)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if len(ifaces) == 0 {
-		log.Printf("warning: package has no interface types matching %q", *ifacePat)
-		return
-	}
-
-	if err := writeMockImplFiles(*outDir, ifacePkg.Name, ifaces); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func parseIfacePkg(importPath string) (*ast.Package, error) {
-	pkg, err := build.Import(importPath, "", 0)
-	if err != nil {
-		log.Fatal(err)
-	}
-	pkgs, err := parser.ParseDir(fset, pkg.Dir, nil, parser.AllErrors)
-	if err != nil {
-		log.Fatal(err)
-	}
 	for _, pkg := range pkgs {
-		if pkg.Name == *pkgName {
-			return pkg, nil
+		ifaces, err := readIfaces(pkg, pat)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if len(ifaces) == 0 {
+			log.Printf("warning: package has no interface types matching %q", *ifacePat)
+			continue
+		}
+		if err := writeMockImplFiles(*outDir, pkg.Name, ifaces); err != nil {
+			log.Fatal(err)
 		}
 	}
-	return nil, fmt.Errorf("No %q package found in %s.", importPath, pkg.Dir)
 }
 
 // readIfaces returns a list of interface types in pkg that should be
@@ -116,7 +93,7 @@ func (v visitFn) Visit(node ast.Node) ast.Visitor {
 	}
 }
 
-func writeMockImplFiles(outDir, pkgName string, svcIfaces []*ast.TypeSpec) error {
+func writeMockImplFiles(outDir, outPkg string, svcIfaces []*ast.TypeSpec) error {
 	if err := os.MkdirAll(outDir, 0700); err != nil {
 		return err
 	}
@@ -171,10 +148,9 @@ func writeMockImplFiles(outDir, pkgName string, svcIfaces []*ast.TypeSpec) error
 		}
 
 		file := &ast.File{
-			Name:  ast.NewIdent(pkgName),
+			Name:  ast.NewIdent(outPkg),
 			Decls: decls,
 		}
-		astutil.AddImport(fset, file, *importPath)
 		filename := fset.Position(iface.Pos()).Filename
 		filename = filepath.Join(outDir, strings.TrimSuffix(filepath.Base(filename), ".go")+"_mock.go")
 		log.Println("#", filename)
