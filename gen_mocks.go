@@ -113,8 +113,10 @@ func writeMockImplFiles(outDir, outPkg, ifacePkgName, ifacePkgPath string, svcIf
 	if err := os.MkdirAll(outDir, 0700); err != nil {
 		return err
 	}
+	decls := map[string][]ast.Decl{} // file -> decls
 	for _, iface := range svcIfaces {
-		var decls []ast.Decl
+		filename := fset.Position(iface.Pos()).Filename
+		filename = filepath.Join(outDir, strings.TrimSuffix(filepath.Base(filename), ".go")+"_mock.go")
 
 		// mock method fields on struct
 		var methFields []*ast.Field
@@ -133,7 +135,7 @@ func writeMockImplFiles(outDir, outPkg, ifacePkgName, ifacePkgPath string, svcIf
 			Name: ast.NewIdent(mockTypeName),
 			Type: &ast.StructType{Fields: &ast.FieldList{List: methFields}},
 		}}}
-		decls = append(decls, implType)
+		decls[filename] = append(decls[filename], implType)
 
 		// struct methods
 		for _, methField := range iface.Type.(*ast.InterfaceType).Methods.List {
@@ -143,7 +145,7 @@ func writeMockImplFiles(outDir, outPkg, ifacePkgName, ifacePkgPath string, svcIf
 					// TODO(sqs): check for import paths or dirs unequal, not pkg name
 					qualifyPkgRefs(meth, ifacePkgName)
 				}
-				decls = append(decls, &ast.FuncDecl{
+				decls[filename] = append(decls[filename], &ast.FuncDecl{
 					Recv: &ast.FieldList{List: []*ast.Field{
 						{
 							Names: []*ast.Ident{ast.NewIdent("s")},
@@ -174,7 +176,7 @@ func writeMockImplFiles(outDir, outPkg, ifacePkgName, ifacePkgPath string, svcIf
 		} else {
 			ifaceType = &ast.SelectorExpr{X: ast.NewIdent(ifacePkgName), Sel: ast.NewIdent(iface.Name.Name)}
 		}
-		decls = append(decls, &ast.GenDecl{
+		decls[filename] = append(decls[filename], &ast.GenDecl{
 			Tok: token.VAR,
 			Specs: []ast.Spec{
 				&ast.ValueSpec{
@@ -189,13 +191,13 @@ func writeMockImplFiles(outDir, outPkg, ifacePkgName, ifacePkgPath string, svcIf
 				},
 			},
 		})
+	}
 
+	for filename, decls := range decls {
 		file := &ast.File{
 			Name:  ast.NewIdent(outPkg),
 			Decls: decls,
 		}
-		filename := fset.Position(iface.Pos()).Filename
-		filename = filepath.Join(outDir, strings.TrimSuffix(filepath.Base(filename), ".go")+"_mock.go")
 		log.Println("#", filename)
 		var w io.Writer
 		if *writeFiles {
