@@ -161,7 +161,8 @@ func writeMockImplFiles(outDir, outPkg, ifacePkgName, ifacePkgPath string, svcIf
 									X:   ast.NewIdent("s"),
 									Sel: ast.NewIdent(methField.Names[0].Name + "_"),
 								},
-								Args: fieldListToIdentList(meth.Params),
+								Args:     fieldListToIdentList(meth.Params),
+								Ellipsis: ellipsisIfNeeded(meth.Params),
 							},
 						}},
 					}},
@@ -275,8 +276,32 @@ func fieldListToIdentList(fl *ast.FieldList) []ast.Expr {
 	var fs []ast.Expr
 	for _, f := range fl.List {
 		for _, name := range f.Names {
-			fs = append(fs, ast.NewIdent(name.Name))
+			x := ast.Expr(ast.NewIdent(name.Name))
+			fs = append(fs, x)
 		}
 	}
 	return fs
+}
+
+func hasEllipsis(fl *ast.FieldList) bool {
+	if fl.List == nil {
+		return false
+	}
+	_, ok := fl.List[len(fl.List)-1].Type.(*ast.Ellipsis)
+	return ok
+}
+
+func ellipsisIfNeeded(fl *ast.FieldList) token.Pos {
+	if hasEllipsis(fl) {
+		return 1
+	}
+	return 0
+}
+
+func astString(x ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, x); err != nil {
+		panic(err)
+	}
+	return buf.String()
 }
