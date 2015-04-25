@@ -26,6 +26,7 @@ var (
 	outDir      = flag.String("o", ".", "output directory")
 	outPkg      = flag.String("outpkg", "", "output pkg name (default: same as input pkg)")
 	namePrefix  = flag.String("name_prefix", "Mock", "output: name prefix of mock impl types (e.g., T -> MockT)")
+	noPassArgs  = flag.String("no_pass_args", "", "don't pass args with this name from the interface method to the mock impl func")
 
 	fset = token.NewFileSet()
 )
@@ -280,6 +281,9 @@ func fieldListToIdentList(fl *ast.FieldList) []ast.Expr {
 	var fs []ast.Expr
 	for _, f := range fl.List {
 		for _, name := range f.Names {
+			if *noPassArgs == name.Name {
+				continue
+			}
 			x := ast.Expr(ast.NewIdent(name.Name))
 			fs = append(fs, x)
 		}
@@ -291,7 +295,11 @@ func hasEllipsis(fl *ast.FieldList) bool {
 	if fl.List == nil {
 		return false
 	}
-	_, ok := fl.List[len(fl.List)-1].Type.(*ast.Ellipsis)
+	lastField := fl.List[len(fl.List)-1]
+	if len(lastField.Names) > 0 && lastField.Names[0].Name == *noPassArgs {
+		return false
+	}
+	_, ok := lastField.Type.(*ast.Ellipsis)
 	return ok
 }
 
