@@ -50,12 +50,16 @@ func main() {
 	}
 
 	for _, pkg := range pkgs {
+		if pkg.Name == "main" || strings.HasSuffix(pkg.Name, "_test") {
+			continue
+		}
+
 		ifaces, err := readIfaces(pkg, pat)
 		if err != nil {
 			log.Fatal(err)
 		}
 		if len(ifaces) == 0 {
-			log.Printf("warning: package has no interface types matching %q", *ifacePat)
+			log.Printf("warning: package %q has no interface types matching %q", pkg.Name, *ifacePat)
 			continue
 		}
 
