@@ -129,7 +129,7 @@ func writeMockImplFiles(outDir, outPkg, ifacePkgName, ifacePkgPath string, svcIf
 			if meth, ok := methField.Type.(*ast.FuncType); ok {
 				methFields = append(methFields, &ast.Field{
 					Names: []*ast.Ident{ast.NewIdent(methField.Names[0].Name + "_")},
-					Type:  meth,
+					Type:  omitNoPassArgs(meth),
 				})
 			}
 		}
@@ -308,6 +308,23 @@ func ellipsisIfNeeded(fl *ast.FieldList) token.Pos {
 		return 1
 	}
 	return 0
+}
+
+func omitNoPassArgs(ft *ast.FuncType) *ast.FuncType {
+	tmp := *ft // copy
+	ft = &tmp
+
+	tmp2 := *ft.Params
+	ft.Params = &tmp2
+	var keepParams []*ast.Field
+	for _, p := range ft.Params.List {
+		if len(p.Names) == 1 && p.Names[0].Name == *noPassArgs {
+			continue
+		}
+		keepParams = append(keepParams, p)
+	}
+	ft.Params.List = keepParams
+	return ft
 }
 
 func astString(x ast.Expr) string {
